@@ -1,0 +1,11 @@
+# Node
+node_modules/
+.env
+
+# Python
+__pycache__/
+*.pyc
+venv/
+
+# React/Vite
+client/dist/
