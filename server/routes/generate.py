@@ -1,4 +1,4 @@
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request, jsonify 
 from services.parser import parse_text_to_model
 from utils.plantuml import generate_plantuml
 
@@ -9,14 +9,17 @@ def generate():
     data = request.get_json()
     text = data.get("text", "")
     
-    # Get the structured model
     model = parse_text_to_model(text)
-    
-    # Generate PlantUML from model
     plantuml_code = generate_plantuml(model)
-    
-    # Return BOTH model and PlantUML code
+
     return jsonify({
         "plantuml": plantuml_code,
         "model": model
     })
+
+@generate_bp.route('/save-model', methods=['POST'])
+def save_model():
+    data = request.get_json()
+    print("🔄 Received updated UML model:", data)
+    # TODO: Save to file or database if needed
+    return jsonify({"status": "success"})

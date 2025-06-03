@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import plantumlEncoder from "plantuml-encoder";
+import UMLDiagram from "./components/UMLDiagram";
 
 export default function App() {
   const [selectedPage, setSelectedPage] = useState("uml");
@@ -18,7 +19,7 @@ export default function App() {
     const text = selectedPage === "uml" ? umlText : oclText;
 
     try {
-      console.log("🚀 Sending to server:", text);
+      console.log("\u{1F680} Sending to server:", text);
       const res = await fetch(`http://127.0.0.1:5000${endpoint}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -28,7 +29,7 @@ export default function App() {
       if (!res.ok) throw new Error("Server responded with " + res.status);
 
       const data = await res.json();
-      console.log("✅ Server responded:", data);
+      console.log("\u{2705} Server responded:", data);
       setOutput(data.plantuml || "No output generated.");
       setEditableOutput(data.plantuml || "");
       setModel(data.model || null);
@@ -40,13 +41,13 @@ export default function App() {
         }
       }, 100);
     } catch (error) {
-      console.error("❌ Fetch error:", error);
-      setOutput("❌ Fetch error: " + error.message);
-      setEditableOutput("❌ Fetch error: " + error.message);
+      console.error("\u{274C} Fetch error:", error);
+      setOutput("\u{274C} Fetch error: " + error.message);
+      setEditableOutput("\u{274C} Fetch error: " + error.message);
     }
   };
 
-  const diagramBlocks = (editableOutput.match(/@startuml[\s\S]*?@enduml/g) || []);
+  const diagramBlocks = editableOutput.match(/@startuml[\s\S]*?@enduml/g) || [];
 
   const handleNext = () => {
     setDiagramIndex((diagramIndex + 1) % diagramBlocks.length);
@@ -88,7 +89,7 @@ export default function App() {
           zIndex: 1000,
         }}
       >
-        <span style={{ fontSize: '20px', color: '#60a5fa' }}>{sidebarOpen ? "☰" : "☰"}</span>
+        <span style={{ fontSize: '20px', color: '#60a5fa' }}>☰</span>
       </button>
 
       {sidebarOpen && (
@@ -139,6 +140,33 @@ export default function App() {
                   onChange={(e) => setEditableOutput(e.target.value)}
                   style={{ width: '100%', height: '200px', padding: '10px', borderRadius: '6px', backgroundColor: '#0f172a', color: '#e0f2fe', border: '1px solid #334155' }}
                 />
+
+                <div style={{ marginTop: '24px' }}>
+                  <h2 style={{ textAlign: 'center', color: '#facc15' }}>🧠 Interactive UML Diagram</h2>
+                  {model && (
+                    <UMLDiagram
+                      initialNodes={model.classes.map(cls => ({
+                        id: cls.name,
+                        type: 'editableNode',
+                        position: { x: Math.random() * 300, y: Math.random() * 300 },
+                        data: {
+                          label: cls.name,
+                          attributes: cls.attributes || [],
+                        },
+                      }))}
+                initialEdges={model.relationships.map((rel, i) => ({
+  id: `e${i}`,
+  source: rel.from,
+  target: rel.to,
+  data: {
+    label: rel.label || rel.type || 'association'
+  },
+}))}
+
+
+                    />
+                  )}
+                </div>
 
                 {diagramBlocks.length > 0 && (
                   <div style={{ display: 'flex', justifyContent: 'center', marginTop: '24px' }}>
