@@ -9,7 +9,14 @@ def generate():
     data = request.get_json()
     text = data.get("text", "")
     
+    # Get the structured model
     model = parse_text_to_model(text)
+    
+    # Generate PlantUML from model
     plantuml_code = generate_plantuml(model)
-
-    return jsonify({"plantuml": plantuml_code})
+    
+    # Return BOTH model and PlantUML code
+    return jsonify({
+        "plantuml": plantuml_code,
+        "model": model
+    })

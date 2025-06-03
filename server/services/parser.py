@@ -1,33 +1,67 @@
 import os
-from openai import OpenAI
+import json
+import re
+import requests
 from dotenv import load_dotenv
 
-load_dotenv()  # ✅ Load .env from root of project
-print("🔐 Loaded API Key:", os.getenv("OPENAI_API_KEY")[:10] + "...")
+load_dotenv()
 
-# ✅ Explicitly pass API key to OpenAI client
-client = OpenAI(api_key=os.getenv("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"))
+API_URL = "https://openrouter.ai/api/v1/chat/completions"  # or Hugging Face
+headers = {
+    "Authorization": f"Bearer {os.getenv('OPENROUTER_API_KEY')}",  # or HUGGINGFACE
+    "Content-Type": "application/json",
+}
+
+def extract_json_block(text):
+    """Extracts the first JSON block (inside triple backticks or bare) from the text"""
+    # Try to extract ```json ... ``` block
+    match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
+    if match:
+        return match.group(1)
+
+    # Fallback: try to extract first {...} JSON block manually
+    match = re.search(r"(\{.*?\})", text, re.DOTALL)
+    if match:
+        return match.group(1)
+
+    return None
 
 def parse_text_to_model(text):
     prompt = f"""
-Turn this into a UML class diagram structure:
+Convert this to a UML class diagram structure in valid JSON format only.
 
-"{text}"
+Input: "{text}"
 
-Respond in this JSON format:
+Respond with only valid JSON like:
 {{
-  "classes": [
-    {{"name": "ClassName", "attributes": ["attr1", "attr2"]}}
-  ],
-  "relationships": [
-    {{"from": "ClassA", "to": "ClassB", "type": "one-to-many", "label": "relationship"}}
-  ]
+  "classes": [{{"name": "X", "attributes": ["a", "b"]}}],
+  "relationships": [{{"from": "X", "to": "Y", "type": "one-to-many", "label": "has"}}]
 }}
 """
 
-    response = client.chat.completions.create(
-model="gpt-3.5-turbo",
-        messages=[{"role": "user", "content": prompt}]
-    )
+    body = {
+        "model": "mistralai/mistral-7b-instruct",
+        "messages": [{"role": "user", "content": prompt}]
+    }
 
-    return eval(response.choices[0].message.content)
+    response = requests.post(API_URL, headers=headers, json=body, timeout=15)
+
+    if response.status_code != 200:
+        print("❌ API Error:", response.status_code, response.text)
+        return {"classes": [], "relationships": []}
+
+    content = response.json()["choices"][0]["message"]["content"]
+    print("🧠 Raw content:\n", repr(content))
+
+    extracted_json = extract_json_block(content)
+    if not extracted_json:
+        print("❌ Could not extract JSON block")
+        return {"classes": [], "relationships": []}
+
+    try:
+        model = json.loads(extracted_json)
+        return model
+    except Exception as e:
+        print("❌ Error parsing extracted JSON:", str(e))
+        print("🔍 Extracted:", extracted_json)
+        return {"classes": [], "relationships": []}
