@@ -11,6 +11,19 @@ import 'reactflow/dist/style.css';
 import EditableNode from './EditableNode';
 
 const UMLDiagram = ({ initialNodes = [], initialEdges = [] }) => {
+  const [edges, setEdges] = useState(initialEdges);
+
+  // Define handleNodeChange first
+  const handleNodeChange = (id, { label, attributes }) => {
+    const updated = nodes.map((node) =>
+      node.id === id
+        ? { ...node, data: { ...node.data, label, attributes, onChange: handleNodeChange } }
+        : node
+    );
+    setNodes(updated);
+    saveToBackend(updated, edges);
+  };
+
   const [nodes, setNodes] = useState(
     initialNodes.map((n) => ({
       ...n,
@@ -22,20 +35,8 @@ const UMLDiagram = ({ initialNodes = [], initialEdges = [] }) => {
       },
     }))
   );
-  const [edges, setEdges] = useState(initialEdges);
 
-  // ✅ Memoized nodeTypes (prevents React Flow warning)
   const nodeTypes = useMemo(() => ({ editableNode: EditableNode }), []);
-
-  function handleNodeChange(id, { label, attributes }) {
-    const updated = nodes.map((node) =>
-      node.id === id
-        ? { ...node, data: { ...node.data, label, attributes, onChange: handleNodeChange } }
-        : node
-    );
-    setNodes(updated);
-    saveToBackend(updated, edges);
-  }
 
   const onNodesChange = useCallback(
     (changes) => {

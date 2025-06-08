@@ -6,41 +6,43 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-API_URL = "https://openrouter.ai/api/v1/chat/completions"  # or Hugging Face
+# ✅ Use OpenAI official API endpoint
+API_URL = "https://api.openai.com/v1/chat/completions"
 headers = {
-    "Authorization": f"Bearer {os.getenv('OPENROUTER_API_KEY')}",  # or HUGGINGFACE
+    "Authorization": f"Bearer {os.getenv('OPENAI_API_KEY')}",  # Put your OpenAI key in .env as OPENAI_API_KEY
     "Content-Type": "application/json",
 }
 
 def extract_json_block(text):
     """Extracts the first JSON block (inside triple backticks or bare) from the text"""
-    # Try to extract ```json ... ``` block
     match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
     if match:
         return match.group(1)
-
-    # Fallback: try to extract first {...} JSON block manually
     match = re.search(r"(\{.*?\})", text, re.DOTALL)
     if match:
         return match.group(1)
-
     return None
+
+import json
 
 def parse_text_to_model(text):
     prompt = f"""
-Convert this to a UML class diagram structure in valid JSON format only.
+You are an expert UML modeler.
 
-Input: "{text}"
+Convert the following English description into a valid JSON representation of a UML class diagram. Only return raw JSON — no explanation.
 
-Respond with only valid JSON like:
+Input:
+{text}
+
+JSON format:
 {{
-  "classes": [{{"name": "X", "attributes": ["a", "b"]}}],
-  "relationships": [{{"from": "X", "to": "Y", "type": "one-to-many", "label": "has"}}]
+  "classes": [{{"name": "ClassName", "attributes": ["attr1", "attr2"]}}],
+  "relationships": [{{"from": "Class1", "to": "Class2", "type": "one-to-many", "label": "relName"}}]
 }}
 """
 
     body = {
-        "model": "mistralai/mistral-7b-instruct",
+        "model": "gpt-3.5-turbo",
         "messages": [{"role": "user", "content": prompt}]
     }
 
@@ -53,15 +55,10 @@ Respond with only valid JSON like:
     content = response.json()["choices"][0]["message"]["content"]
     print("🧠 Raw content:\n", repr(content))
 
-    extracted_json = extract_json_block(content)
-    if not extracted_json:
-        print("❌ Could not extract JSON block")
-        return {"classes": [], "relationships": []}
-
     try:
-        model = json.loads(extracted_json)
+        # 🔁 שים לב – הפענוח פעמיים!
+        model = json.loads(content)  # First parse: convert string to JSON dict
         return model
     except Exception as e:
-        print("❌ Error parsing extracted JSON:", str(e))
-        print("🔍 Extracted:", extracted_json)
+        print("❌ Error parsing content:", str(e))
         return {"classes": [], "relationships": []}
