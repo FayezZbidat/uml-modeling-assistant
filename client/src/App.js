@@ -11,6 +11,7 @@ export default function App() {
   const [model, setModel] = useState(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [diagramIndex, setDiagramIndex] = useState(0);
+const [explanation, setExplanation] = useState('');
 
   const topRef = useRef(null);
 
@@ -33,6 +34,8 @@ export default function App() {
       setOutput(data.plantuml || "No output generated.");
       setEditableOutput(data.plantuml || "");
       setModel(data.model || null);
+      setExplanation(data.explanation || '');
+
       setDiagramIndex(0);
 
       setTimeout(() => {
@@ -168,6 +171,8 @@ export default function App() {
                   )}
                 </div>
 
+
+
                 {diagramBlocks.length > 0 && (
                   <div style={{ display: 'flex', justifyContent: 'center', marginTop: '24px' }}>
                     <iframe
@@ -188,27 +193,20 @@ export default function App() {
               </div>
             )}
 
-            {model && (
-              <div style={{ marginTop: '24px' }}>
-                <h3>📦 Classes</h3>
-                <ul>
-                  {model.classes.map(cls => (
-                    <li key={cls.name}>
-                      <strong>{cls.name}</strong>: {cls.attributes.join(', ')}
-                    </li>
-                  ))}
-                </ul>
-
-                <h3>🔗 Relationships</h3>
-                <ul>
-                  {model.relationships.map((rel, i) => (
-                    <li key={i}>
-                      {rel.from} → {rel.to} ({rel.type}) {rel.label && `: ${rel.label}`}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            )}
+            {explanation && (
+  <div
+    style={{
+      background: '#f9fafb',
+      padding: '16px',
+      borderRadius: '8px',
+      border: '1px solid #e5e7eb',
+      marginTop: '20px',
+      fontFamily: 'Arial, sans-serif',
+      color: 'black'
+    }}
+    dangerouslySetInnerHTML={{ __html: explanation }}
+  />
+)}
           </div>
         </div>
       </div>
