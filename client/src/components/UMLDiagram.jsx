@@ -24,17 +24,19 @@ const UMLDiagram = ({ initialNodes = [], initialEdges = [] }) => {
     saveToBackend(updated, edges);
   };
 
-  const [nodes, setNodes] = useState(
-    initialNodes.map((n) => ({
-      ...n,
-      type: 'editableNode',
-      data: {
-        ...n.data,
-        attributes: n.data.attributes || [],
-        onChange: handleNodeChange,
-      },
-    }))
-  );
+ const [nodes, setNodes] = useState(
+  initialNodes.map((n) => ({
+    ...n,
+    type: 'editableNode',
+    data: {
+      ...n.data,
+      id: n.id, 
+      attributes: n.data.attributes || [],
+      onChange: handleNodeChange,
+    },
+  }))
+);
+
 
   const nodeTypes = useMemo(() => ({ editableNode: EditableNode }), []);
 
