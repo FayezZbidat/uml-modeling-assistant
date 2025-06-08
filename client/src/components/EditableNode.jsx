@@ -2,27 +2,37 @@ import React from 'react';
 import { Handle, Position } from 'reactflow';
 
 const EditableNode = ({ data, isConnectable }) => {
-  const { label, attributes = [], onChange, id } = data;
+  const { label = '', attributes = [], onChange } = data;
+
+  const nodeId = data.id; // ✅ Ensure we use the id from data
 
   const handleLabelChange = (e) => {
-    onChange(id, { label: e.target.value, attributes });
+    if (onChange) {
+      onChange(nodeId, { label: e.target.value, attributes });
+    }
   };
 
   const handleAttributeChange = (index, newValue) => {
     const updated = [...attributes];
     updated[index] = newValue;
-    onChange(id, { label, attributes: updated });
+    if (onChange) {
+      onChange(nodeId, { label, attributes: updated });
+    }
   };
 
   const addAttribute = () => {
     const updated = [...attributes, 'newAttribute'];
-    onChange(id, { label, attributes: updated });
+    if (onChange) {
+      onChange(nodeId, { label, attributes: updated });
+    }
   };
 
   const removeAttribute = (index) => {
     const updated = [...attributes];
     updated.splice(index, 1);
-    onChange(id, { label, attributes: updated });
+    if (onChange) {
+      onChange(nodeId, { label, attributes: updated });
+    }
   };
 
   return (
