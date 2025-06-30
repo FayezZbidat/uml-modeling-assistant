@@ -13,7 +13,7 @@ import {
 export default function App() {
   const [messages, setMessages] = useState([]);
   const [isTyping, setIsTyping] = useState(false);
-  const [diagramType, setDiagramType] = useState("class"); // סוג הדיאגרמה
+  const [diagramType, setDiagramType] = useState("class");
 
   const handleSend = async (input) => {
     if (!input.trim()) return;
@@ -31,12 +31,11 @@ export default function App() {
       const backendUrl = process.env.REACT_APP_API_URL || "http://127.0.0.1:5000";
 
       const res = await fetch(`${backendUrl}/api/generate`, {
-
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           text: input,
-          type: diagramType // שליחת סוג הדיאגרמה
+          type: diagramType
         })
       });
 
@@ -44,52 +43,54 @@ export default function App() {
 
       const data = await res.json();
       const { plantuml, explanation } = data;
-      // bayan added here
-      // 🧼 Clean triple backticks from GPT responses
+      
       const cleanedPlantUML = (plantuml || "").replace(/```(plantuml)?/g, '').trim();
-
-      // 🧱 Extract valid PlantUML blocks
       const diagramBlocks = cleanedPlantUML.match(/@startuml[\s\S]*?@enduml/g) || [];
-
-      // 🔐 Safely encode each one
       const encoded = diagramBlocks.map(block => plantumlEncoder.encode(block));
-
 
       const botMessage = {
         sender: "UMLBot",
         direction: "incoming",
         type: "custom",
+        plantumlCode: cleanedPlantUML,
+        diagramBlocks: diagramBlocks,
+        encoded: encoded,
         content: (
           <div style={{ padding: "10px" }}>
             <p>{explanation || "❗ No explanation returned."}</p>
-            {/* bayan added here – made diagram block scrollable to fix layout issues with long outputs */}
+            
             <pre
-            style={{
-              background: "#0f172a",
-              color: "#e0f2fe",
-              padding: "10px",
-              borderRadius: "6px",
-              maxHeight: "300px",
-              overflowY: "auto",
-              whiteSpace: "pre-wrap",
-              fontFamily: "monospace",
-              fontSize: "13px",
-              textAlign: "left"
-            }}
+              style={{
+                background: "#0f172a",
+                color: "#e0f2fe",
+                padding: "10px",
+                borderRadius: "6px",
+                maxHeight: "300px",
+                overflowY: "auto",
+                whiteSpace: "pre-wrap",
+                fontFamily: "monospace",
+                fontSize: "13px",
+                textAlign: "left"
+              }}
             >
-            {plantuml || "⚠️ No PlantUML code returned."}
+              {cleanedPlantUML || "⚠️ No PlantUML code returned."}
             </pre>
 
-            {encoded.length > 0 ? encoded.map((code, i) => (
-              <iframe
-                key={i}
-                title={`uml-diagram-${i}`}
-                src={`https://www.plantuml.com/plantuml/svg/${code}`}
-                width="100%"
-                height="300px"
-                style={{ border: "none", background: "#fff", marginTop: "10px" }}
-              />
-            )) : <p style={{ color: "orange" }}>⚠️ No UML diagram blocks found.</p>}
+            {encoded.length > 0 ? (
+              <>
+                {encoded.map((code, i) => (
+                  <DiagramDisplay
+                    key={i}
+                    index={i}
+                    code={code}
+                    plantumlBlock={diagramBlocks[i]}
+                    diagramType={diagramType}
+                  />
+                ))}
+              </>
+            ) : (
+              <p style={{ color: "orange" }}>⚠️ No UML diagram blocks found.</p>
+            )}
           </div>
         )
       };
@@ -118,7 +119,6 @@ export default function App() {
         paddingTop: "20px"
       }}
     >
-      {/* 🔰 לוגו בראש הדף */}
       <img
         src="/uml-technology-letter-logo.png"
         alt="UML Logo"
@@ -129,7 +129,6 @@ export default function App() {
         }}
       />
 
-      {/* ✅ תיבת בחירה מתחת ללוגו */}
       <div style={{ marginBottom: "10px" }}>
         <label htmlFor="diagram-select" style={{ marginRight: "10px", fontWeight: "bold" }}>
           Choose Diagram Type:
@@ -151,7 +150,6 @@ export default function App() {
         </select>
       </div>
 
-      {/* 🔲 ממשק הצ'אט */}
       <div
         style={{
           width: "90vw",
@@ -166,8 +164,6 @@ export default function App() {
       >
         <MainContainer>
           <ChatContainer>
-
-            {/* 💬 רשימת הודעות */}
             <MessageList typingIndicator={isTyping ? <TypingIndicator content="UMLBot is typing..." /> : null}>
               {messages.map((msg, i) => (
                 <Message
@@ -187,11 +183,168 @@ export default function App() {
               ))}
             </MessageList>
 
-            {/* 📝 שורת הקלדה */}
             <MessageInput placeholder="Describe your system..." onSend={handleSend} />
-
           </ChatContainer>
         </MainContainer>
+      </div>
+    </div>
+  );
+}
+
+// Separate component for each diagram
+function DiagramDisplay({ index, code, plantumlBlock, diagramType }) {
+  const [isEditing, setIsEditing] = useState(false);
+  const [editedCode, setEditedCode] = useState(plantumlBlock);
+
+  const handleEditToggle = () => {
+    setIsEditing(!isEditing);
+  };
+
+  const handleCodeChange = (e) => {
+    setEditedCode(e.target.value);
+  };
+
+  const handleSave = () => {
+    // Here you would update the diagram
+    setIsEditing(false);
+  };
+
+  const currentCode = plantumlEncoder.encode(editedCode);
+
+  return (
+    <div style={{ marginTop: "10px" }}>
+      <div style={{ marginBottom: "10px", display: "flex", gap: "10px", alignItems: "center" }}>
+        <button
+          onClick={handleEditToggle}
+          style={{
+            padding: "8px 16px",
+            backgroundColor: isEditing ? "#dc3545" : "#007bff",
+            color: "white",
+            border: "none",
+            borderRadius: "6px",
+            cursor: "pointer",
+            fontSize: "14px",
+            fontWeight: "500"
+          }}
+        >
+          {isEditing ? '👁️ View Mode' : '✏️ Edit Mode'}
+        </button>
+        
+        {isEditing && (
+          <>
+            <button
+              onClick={handleSave}
+              style={{
+                padding: "8px 16px",
+                backgroundColor: "#28a745",
+                color: "white",
+                border: "none",
+                borderRadius: "6px",
+                cursor: "pointer",
+                fontSize: "14px",
+                fontWeight: "500"
+              }}
+            >
+              💾 Save Changes
+            </button>
+            <span style={{ color: "#6c757d", fontSize: "13px" }}>
+              Edit the PlantUML code below
+            </span>
+          </>
+        )}
+      </div>
+
+      {isEditing ? (
+        <div>
+          <textarea
+            value={editedCode}
+            onChange={handleCodeChange}
+            style={{
+              width: "100%",
+              height: "400px",
+              padding: "10px",
+              fontFamily: "monospace",
+              fontSize: "13px",
+              border: "2px solid #007bff",
+              borderRadius: "8px",
+              backgroundColor: "#f8f9fa"
+            }}
+          />
+        </div>
+      ) : (
+        <div 
+          style={{
+            backgroundColor: "white",
+            padding: "10px",
+            borderRadius: "8px",
+            border: "1px solid #ddd"
+          }}
+        >
+          <iframe
+            title={`uml-diagram-${index}`}
+            src={`https://www.plantuml.com/plantuml/svg/${currentCode}`}
+            width="100%"
+            height="400px"
+            style={{ 
+              border: "none", 
+              background: "#fff",
+              display: "block"
+            }}
+          />
+        </div>
+      )}
+      
+      {/* Export buttons */}
+      <div style={{ marginTop: "10px", display: "flex", gap: "10px" }}>
+        <button
+          onClick={() => window.open(`https://www.plantuml.com/plantuml/png/${currentCode}`, '_blank')}
+          style={{
+            padding: "6px 12px",
+            backgroundColor: "#6c757d",
+            color: "white",
+            border: "none",
+            borderRadius: "4px",
+            fontSize: "12px",
+            cursor: "pointer"
+          }}
+        >
+          📷 Export PNG
+        </button>
+        <button
+          onClick={() => window.open(`https://www.plantuml.com/plantuml/svg/${currentCode}`, '_blank')}
+          style={{
+            padding: "6px 12px",
+            backgroundColor: "#6c757d",
+            color: "white",
+            border: "none",
+            borderRadius: "4px",
+            fontSize: "12px",
+            cursor: "pointer"
+          }}
+        >
+          🎨 Export SVG
+        </button>
+        <button
+          onClick={() => {
+            const blob = new Blob([editedCode], { type: 'text/plain' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `diagram-${index}.puml`;
+            a.click();
+          }}
+          style={{
+            padding: "6px 12px",
+            backgroundColor: "#6c757d",
+            color: "white",
+            border: "none",
+            borderRadius: "4px",
+            fontSize: "12px",
+            cursor: "pointer"
+          }}
+        >
+          📄 Export PlantUML
+        </button>
       </div>
     </div>
   );
