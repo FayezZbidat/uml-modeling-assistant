@@ -273,14 +273,22 @@ headers = {
 }
 
 def extract_json_block(text):
-    """Extracts the first JSON block (inside triple backticks or bare) from the text"""
-    match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
+    """Extract JSON part from GPT response, removing markdown fences and extra text."""
+    import re
+    # Match JSON inside ```json ... ``` fences
+    match = re.search(r"```json\s*(\{.*?\})\s*```", text, re.DOTALL)
     if match:
         return match.group(1)
-    match = re.search(r"(\{.*?\})", text, re.DOTALL)
+    # Match JSON inside ``` ... ```
+    match = re.search(r"```\s*(\{.*?\})\s*```", text, re.DOTALL)
+    if match:
+        return match.group(1)
+    # Match first {...} in text
+    match = re.search(r"(\{.*\})", text, re.DOTALL)
     if match:
         return match.group(1)
     return None
+
 
 def parse_text_to_model(text, diagram_type='class'):
     """Main function that combines NLP extraction with GPT refinement."""

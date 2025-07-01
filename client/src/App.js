@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import plantumlEncoder from "plantuml-encoder";
 import "@chatscope/chat-ui-kit-styles/dist/default/styles.min.css";
 import {
@@ -14,6 +14,74 @@ export default function App() {
   const [messages, setMessages] = useState([]);
   const [isTyping, setIsTyping] = useState(false);
   const [diagramType, setDiagramType] = useState("class");
+  const [diagrams, setDiagrams] = useState([]);
+  const [currentDiagramId, setCurrentDiagramId] = useState(null);
+
+  const backendUrl = process.env.REACT_APP_API_URL || "http://127.0.0.1:5000";
+
+  useEffect(() => {
+    const fetchDiagrams = async () => {
+      const res = await fetch(`${backendUrl}/api/diagrams`);
+      const data = await res.json();
+      setDiagrams(data);
+    };
+    fetchDiagrams();
+  }, [backendUrl]);
+
+  const loadDiagram = async (id) => {
+    if (!id) return;
+    const res = await fetch(`${backendUrl}/api/diagrams/${id}`);
+    const data = await res.json();
+
+    const encoded = plantumlEncoder.encode(data.plantuml_code);
+
+    const botMessage = {
+      sender: "UMLBot",
+      direction: "incoming",
+      type: "custom",
+      plantumlCode: data.plantuml_code,
+      diagramBlocks: [data.plantuml_code],
+      encoded: [encoded],
+      content: (
+        <div>
+          <p>✅ Loaded diagram: {data.name}</p>
+          <DiagramDisplay
+            index={0}
+            code={encoded}
+            plantumlBlock={data.plantuml_code}
+            diagramType={data.diagram_type}
+            currentDiagramId={id}
+            setMessages={setMessages}
+          />
+        </div>
+      )
+    };
+
+    setCurrentDiagramId(id);
+    setDiagramType(data.diagram_type);
+    setMessages([botMessage]);
+  };
+
+  const saveDiagram = async (diagramType, plantumlCode) => {
+    const now = new Date();
+    const name = `Diagram ${now.toLocaleString()}`;
+
+    const res = await fetch(`${backendUrl}/api/diagrams`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name,
+        diagram_type: diagramType,
+        plantuml_code: plantumlCode
+      })
+    });
+    const data = await res.json();
+    setCurrentDiagramId(data.id);
+
+    const listRes = await fetch(`${backendUrl}/api/diagrams`);
+    const listData = await listRes.json();
+    setDiagrams(listData);
+  };
 
   const handleSend = async (input) => {
     if (!input.trim()) return;
@@ -28,8 +96,6 @@ export default function App() {
     setIsTyping(true);
 
     try {
-      const backendUrl = process.env.REACT_APP_API_URL || "http://127.0.0.1:5000";
-
       const res = await fetch(`${backendUrl}/api/generate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -43,7 +109,7 @@ export default function App() {
 
       const data = await res.json();
       const { plantuml, explanation } = data;
-      
+
       const cleanedPlantUML = (plantuml || "").replace(/```(plantuml)?/g, '').trim();
       const diagramBlocks = cleanedPlantUML.match(/@startuml[\s\S]*?@enduml/g) || [];
       const encoded = diagramBlocks.map(block => plantumlEncoder.encode(block));
@@ -58,7 +124,6 @@ export default function App() {
         content: (
           <div style={{ padding: "10px" }}>
             <p>{explanation || "❗ No explanation returned."}</p>
-            
             <pre
               style={{
                 background: "#0f172a",
@@ -85,6 +150,8 @@ export default function App() {
                     code={code}
                     plantumlBlock={diagramBlocks[i]}
                     diagramType={diagramType}
+                    currentDiagramId={currentDiagramId}
+                    setMessages={setMessages}
                   />
                 ))}
               </>
@@ -96,6 +163,9 @@ export default function App() {
       };
 
       setMessages((prev) => [...prev, botMessage]);
+
+      // Save diagram after generation
+      await saveDiagram(diagramType, cleanedPlantUML);
     } catch (error) {
       setMessages((prev) => [...prev, {
         message: `❌ Error: ${error.message}`,
@@ -131,10 +201,32 @@ export default function App() {
 
       <div style={{ marginBottom: "10px" }}>
         <label htmlFor="diagram-select" style={{ marginRight: "10px", fontWeight: "bold" }}>
-          Choose Diagram Type:
+          Load Saved Diagram:
         </label>
         <select
           id="diagram-select"
+          value={currentDiagramId || ""}
+          onChange={(e) => loadDiagram(e.target.value)}
+          style={{
+            padding: "6px 12px",
+            borderRadius: "6px",
+            border: "1px solid #ccc",
+            fontSize: "14px"
+          }}
+        >
+          <option value="">-- Select --</option>
+          {diagrams.map((d) => (
+            <option key={d.id} value={d.id}>{d.name}</option>
+          ))}
+        </select>
+      </div>
+
+      <div style={{ marginBottom: "10px" }}>
+        <label htmlFor="diagram-type-select" style={{ marginRight: "10px", fontWeight: "bold" }}>
+          Choose Diagram Type:
+        </label>
+        <select
+          id="diagram-type-select"
           value={diagramType}
           onChange={(e) => setDiagramType(e.target.value)}
           style={{
@@ -191,10 +283,14 @@ export default function App() {
   );
 }
 
-// Separate component for each diagram
-function DiagramDisplay({ index, code, plantumlBlock, diagramType }) {
+function DiagramDisplay({ index, code, plantumlBlock, diagramType, currentDiagramId, setMessages }) {
   const [isEditing, setIsEditing] = useState(false);
   const [editedCode, setEditedCode] = useState(plantumlBlock);
+  const backendUrl = process.env.REACT_APP_API_URL || "http://127.0.0.1:5000";
+
+  useEffect(() => {
+    setEditedCode(plantumlBlock);
+  }, [plantumlBlock]);
 
   const handleEditToggle = () => {
     setIsEditing(!isEditing);
@@ -204,9 +300,26 @@ function DiagramDisplay({ index, code, plantumlBlock, diagramType }) {
     setEditedCode(e.target.value);
   };
 
-  const handleSave = () => {
-    // Here you would update the diagram
+  const handleSave = async () => {
+    if (!currentDiagramId) {
+      alert("⚠️ No diagram loaded.");
+      return;
+    }
+
+    await fetch(`${backendUrl}/api/diagrams/${currentDiagramId}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ plantuml_code: editedCode })
+    });
+
     setIsEditing(false);
+
+    setMessages(prev => [...prev, {
+      message: "✅ Diagram updated successfully.",
+      sender: "UMLBot",
+      direction: "incoming",
+      type: "text"
+    }]);
   };
 
   const currentCode = plantumlEncoder.encode(editedCode);
@@ -229,7 +342,7 @@ function DiagramDisplay({ index, code, plantumlBlock, diagramType }) {
         >
           {isEditing ? '👁️ View Mode' : '✏️ Edit Mode'}
         </button>
-        
+
         {isEditing && (
           <>
             <button
@@ -255,45 +368,31 @@ function DiagramDisplay({ index, code, plantumlBlock, diagramType }) {
       </div>
 
       {isEditing ? (
-        <div>
-          <textarea
-            value={editedCode}
-            onChange={handleCodeChange}
-            style={{
-              width: "100%",
-              height: "400px",
-              padding: "10px",
-              fontFamily: "monospace",
-              fontSize: "13px",
-              border: "2px solid #007bff",
-              borderRadius: "8px",
-              backgroundColor: "#f8f9fa"
-            }}
-          />
-        </div>
-      ) : (
-        <div 
+        <textarea
+          value={editedCode}
+          onChange={handleCodeChange}
           style={{
-            backgroundColor: "white",
+            width: "100%",
+            height: "400px",
             padding: "10px",
+            fontFamily: "monospace",
+            fontSize: "13px",
+            border: "2px solid #007bff",
             borderRadius: "8px",
-            border: "1px solid #ddd"
+            backgroundColor: "#f8f9fa"
           }}
-        >
-          <iframe
-            title={`uml-diagram-${index}`}
-            src={`https://www.plantuml.com/plantuml/svg/${currentCode}`}
-            width="100%"
-            height="400px"
-            style={{ 
-              border: "none", 
-              background: "#fff",
-              display: "block"
-            }}
-          />
-        </div>
+        />
+      ) : (
+        <iframe
+          key={currentCode} // forces iframe to reload when code changes
+          title={`uml-diagram-${index}`}
+          src={`https://www.plantuml.com/plantuml/svg/${currentCode}`}
+          width="100%"
+          height="400px"
+          style={{ border: "none", background: "#fff", display: "block" }}
+        />
       )}
-      
+
       {/* Export buttons */}
       <div style={{ marginTop: "10px", display: "flex", gap: "10px" }}>
         <button

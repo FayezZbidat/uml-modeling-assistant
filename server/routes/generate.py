@@ -5,6 +5,7 @@ from services.parser import parse_text_to_model
 from utils.plantuml import generate_plantuml
 from dotenv import load_dotenv
 import os
+import re
 
 load_dotenv()
 
@@ -18,6 +19,16 @@ def get_session_id(req):
     if not sid:
         sid = str(uuid.uuid4())
     return sid
+
+def extract_plantuml_blocks(text):
+    """
+    Extract all PlantUML blocks starting with @startuml and ending with @enduml.
+    Returns joined PlantUML code blocks as a single string.
+    """
+    blocks = re.findall(r'@startuml[\s\S]*?@enduml', text)
+    if blocks:
+        return "\n".join(blocks)
+    return ""
 
 @generate_bp.route('/generate', methods=['POST'])
 def generate():
@@ -78,8 +89,8 @@ def generate():
         SESSION_STORE[session_id] = conversation
 
         if "```plantuml" in reply:
-            explanation, plantuml_code = reply.split("```plantuml", 1)
-            plantuml_code = plantuml_code.strip("`\n ")
+            explanation, plantuml_part = reply.split("```plantuml", 1)
+            plantuml_code = extract_plantuml_blocks(plantuml_part)
         else:
             explanation = reply
             plantuml_code = ""
