@@ -1,9 +1,10 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import html2canvas from 'html2canvas';
 import jsPDF from 'jspdf';
 import { saveAs } from 'file-saver';
+import { FiDownload, FiCopy, FiExternalLink, FiX, FiCheck, FiFileText } from 'react-icons/fi';
 
-const DiagramExport = ({ plantumlCode, diagramUrl, encodedCode }) => {
+const DiagramExport = ({ plantumlCode, diagramRef, chatMessages, onClose }) => {
   const [isExporting, setIsExporting] = useState(false);
   const [exportFormat, setExportFormat] = useState('png');
   const [exportStatus, setExportStatus] = useState('');
@@ -11,7 +12,7 @@ const DiagramExport = ({ plantumlCode, diagramUrl, encodedCode }) => {
   const [exportSettings, setExportSettings] = useState({
     quality: 'high',
     background: '#ffffff',
-    includeCode: false,
+    includeChatLog: false,
     fileName: 'uml-diagram'
   });
 
@@ -28,59 +29,22 @@ const DiagramExport = ({ plantumlCode, diagramUrl, encodedCode }) => {
     if (isError) console.error(message);
   };
 
-  // Export as PNG with quality options
+  // Export as PNG
   const exportAsPNG = async () => {
     try {
       setIsExporting(true);
       showStatus('Generating PNG...');
       
-      // Determine quality settings
-      const scale = exportSettings.quality === 'high' ? 3 : exportSettings.quality === 'medium' ? 2 : 1;
+      const scale = exportSettings.quality === 'high' ? 3 : 
+                   exportSettings.quality === 'medium' ? 2 : 1;
       
-      // Try direct PlantUML server download first
-      try {
-        const url = `https://www.plantuml.com/plantuml/png/${encodedCode}`;
-        const response = await fetch(url);
-        
-        if (response.ok) {
-          const blob = await response.blob();
-          saveAs(blob, getFileName('png'));
-          showStatus('PNG exported successfully!');
-          return;
-        }
-      } catch (serverError) {
-        console.warn('PlantUML server method failed, trying canvas method...');
-      }
-      
-      // Fallback: Create a temporary container with the SVG
-      const tempContainer = document.createElement('div');
-      tempContainer.style.position = 'absolute';
-      tempContainer.style.left = '-9999px';
-      tempContainer.style.backgroundColor = exportSettings.background;
-      document.body.appendChild(tempContainer);
-      
-      // Load SVG into container
-      const img = document.createElement('img');
-      img.src = `https://www.plantuml.com/plantuml/svg/${encodedCode}`;
-      
-      await new Promise((resolve, reject) => {
-        img.onload = resolve;
-        img.onerror = reject;
-        tempContainer.appendChild(img);
-      });
-      
-      // Convert to canvas
-      const canvas = await html2canvas(tempContainer, {
+      const canvas = await html2canvas(diagramRef.current, {
         backgroundColor: exportSettings.background,
         scale: scale,
         logging: false,
         useCORS: true
       });
       
-      // Clean up
-      document.body.removeChild(tempContainer);
-      
-      // Convert to blob and save
       canvas.toBlob((blob) => {
         saveAs(blob, getFileName('png'));
         showStatus('PNG exported successfully!');
@@ -93,166 +57,101 @@ const DiagramExport = ({ plantumlCode, diagramUrl, encodedCode }) => {
     }
   };
 
-  // Export as SVG with optimization
-  const exportAsSVG = async () => {
+  // Export as PDF
+// Export as PDF (diagram + PlantUML only, no chat log)
+const exportAsPDF = async () => {
+  try {
+    setIsExporting(true);
+    showStatus('Generating PDF...');
+
+    const pdf = new jsPDF({
+      orientation: 'landscape',
+      unit: 'mm',
+      format: 'a4'
+    });
+
+    // Add metadata
+    pdf.setProperties({
+      title: exportSettings.fileName,
+      subject: 'UML Diagram Export',
+      author: 'UML Modeling Assistant',
+      creator: 'UML Modeling Assistant'
+    });
+
+    // Capture diagram as image
+    const canvas = await html2canvas(diagramRef.current, {
+      backgroundColor: exportSettings.background,
+      scale: 2,
+      logging: false
+    });
+
+    const imgData = canvas.toDataURL('image/png');
+
+    // Calculate image dimensions
+    const pageWidth = pdf.internal.pageSize.getWidth();
+    const pageHeight = pdf.internal.pageSize.getHeight();
+    const imgWidth = pageWidth - 40;
+    const imgHeight = (canvas.height * imgWidth) / canvas.width;
+
+    // Add diagram image
+    pdf.addImage(imgData, 'PNG', 20, 20, imgWidth, imgHeight);
+
+    // Add PlantUML code
+    pdf.addPage();
+    pdf.setFontSize(14);
+    pdf.setTextColor(33, 33, 33);
+    pdf.text('PlantUML Source Code', 20, 20);
+
+    pdf.setFontSize(9);
+    pdf.setFont('courier', 'normal');
+    pdf.setTextColor(0, 0, 0);
+
+    let codeY = 35;
+    plantumlCode.split('\n').forEach(line => {
+      if (codeY > pageHeight - 20) {
+        pdf.addPage();
+        codeY = 20;
+      }
+      const wrappedLines = pdf.splitTextToSize(line, pageWidth - 40);
+      wrappedLines.forEach(wrappedLine => {
+        pdf.text(wrappedLine, 20, codeY);
+        codeY += 5;
+      });
+    });
+
+    pdf.save(getFileName('pdf'));
+    showStatus('PDF exported successfully!');
+  } catch (error) {
+    showStatus('Failed to export PDF: ' + error.message, true);
+  } finally {
+    setIsExporting(false);
+  }
+};
+
+  // Export chat log as text file
+  const exportChatLog = () => {
     try {
-      setIsExporting(true);
-      showStatus('Generating SVG...');
-      
-      const url = `https://www.plantuml.com/plantuml/svg/${encodedCode}`;
-      const response = await fetch(url);
-      
-      if (!response.ok) throw new Error('Failed to fetch SVG');
-      
-      let svgText = await response.text();
-      
-      // Clean and optimize SVG
-      svgText = svgText.replace(/<!--[\s\S]*?-->/g, ''); // Remove comments
-      
-      // Add background if specified
-      if (exportSettings.background !== 'transparent') {
-        const bgRect = `<rect width="100%" height="100%" fill="${exportSettings.background}"/>`;
-        svgText = svgText.replace(/(<svg[^>]*>)/, `$1${bgRect}`);
+      if (!chatMessages || chatMessages.length === 0) {
+        showStatus('No chat messages to export', true);
+        return;
       }
       
-      // Create blob and download
-      const blob = new Blob([svgText], { type: 'image/svg+xml;charset=utf-8' });
-      saveAs(blob, getFileName('svg'));
-      showStatus('SVG exported successfully!');
+      let chatText = `UML Modeling Assistant - Chat Log\n`;
+      chatText += `Generated: ${new Date().toLocaleString()}\n`;
+      chatText += `========================================\n\n`;
       
-    } catch (error) {
-      showStatus('Failed to export SVG: ' + error.message, true);
-    } finally {
-      setIsExporting(false);
-    }
-  };
-
-  // Export as PDF with advanced options
-  const exportAsPDF = async () => {
-    try {
-      setIsExporting(true);
-      showStatus('Generating PDF...');
-      
-      // Determine PDF orientation based on diagram
-      const isLandscape = plantumlCode.includes('left to right') || 
-                         plantumlCode.includes('top to bottom');
-      
-      const pdf = new jsPDF({
-        orientation: isLandscape ? 'landscape' : 'portrait',
-        unit: 'mm',
-        format: exportSettings.quality === 'high' ? 'a3' : 'a4'
+      chatMessages.forEach(msg => {
+        const timestamp = new Date(msg.timestamp || Date.now()).toLocaleTimeString();
+        const sender = msg.sender === 'user' ? 'You' : 'UMLBot';
+        chatText += `[${timestamp}] ${sender}: ${msg.message}\n`;
       });
       
-      // Add metadata
-      pdf.setProperties({
-        title: exportSettings.fileName,
-        subject: 'UML Diagram Export',
-        author: 'UML Modeling Assistant',
-        keywords: 'uml, diagram, ' + exportFormat,
-        creator: 'UML Modeling Assistant'
-      });
-      
-      // Add header
-      pdf.setFontSize(18);
-      pdf.setTextColor(33, 33, 33);
-      pdf.text(exportSettings.fileName, 20, 20);
-      
-      // Add timestamp
-      pdf.setFontSize(10);
-      pdf.setTextColor(100, 100, 100);
-      pdf.text(`Generated: ${new Date().toLocaleString()}`, 20, 28);
-      
-      // Get image data
-      const pngUrl = `https://www.plantuml.com/plantuml/png/${encodedCode}`;
-      const response = await fetch(pngUrl);
-      const blob = await response.blob();
-      
-      // Convert to base64
-      const reader = new FileReader();
-      reader.onloadend = function() {
-        const base64data = reader.result;
-        
-        // Calculate image dimensions
-        const pageWidth = pdf.internal.pageSize.getWidth();
-        const pageHeight = pdf.internal.pageSize.getHeight();
-        const margin = 20;
-        const maxWidth = pageWidth - (2 * margin);
-        const maxHeight = pageHeight - 60; // Leave space for header
-        
-        // Add image
-        let imgWidth = maxWidth;
-        let imgHeight = maxHeight;
-        
-        // Maintain aspect ratio
-        const img = new Image();
-        img.onload = function() {
-          const aspectRatio = img.width / img.height;
-          if (imgWidth / imgHeight > aspectRatio) {
-            imgWidth = imgHeight * aspectRatio;
-          } else {
-            imgHeight = imgWidth / aspectRatio;
-          }
-          
-          const x = (pageWidth - imgWidth) / 2;
-          const y = 40;
-          
-          pdf.addImage(base64data, 'PNG', x, y, imgWidth, imgHeight);
-          
-          // Add PlantUML code if requested
-          if (exportSettings.includeCode && plantumlCode) {
-            pdf.addPage();
-            pdf.setFontSize(14);
-            pdf.setTextColor(33, 33, 33);
-            pdf.text('PlantUML Source Code', 20, 20);
-            
-            pdf.setFontSize(9);
-            pdf.setFont('courier');
-            
-            // Split code into lines
-            const lines = plantumlCode.split('\n');
-            let yPosition = 35;
-            const lineHeight = 4;
-            const pageBottom = pageHeight - 20;
-            
-            lines.forEach(line => {
-              if (yPosition > pageBottom) {
-                pdf.addPage();
-                yPosition = 20;
-              }
-              
-              // Handle long lines by wrapping
-              const maxLineWidth = pageWidth - 40;
-              const wrappedLines = pdf.splitTextToSize(line, maxLineWidth);
-              
-              wrappedLines.forEach(wrappedLine => {
-                pdf.text(wrappedLine, 20, yPosition);
-                yPosition += lineHeight;
-              });
-            });
-          }
-          
-          // Save PDF
-          pdf.save(getFileName('pdf'));
-          showStatus('PDF exported successfully!');
-        };
-        img.src = base64data;
-      };
-      reader.readAsDataURL(blob);
+      const blob = new Blob([chatText], { type: 'text/plain;charset=utf-8' });
+      saveAs(blob, getFileName('txt'));
+      showStatus('Chat log exported successfully!');
       
     } catch (error) {
-      showStatus('Failed to export PDF: ' + error.message, true);
-    } finally {
-      setIsExporting(false);
-    }
-  };
-
-  // Copy PlantUML code to clipboard
-  const copyToClipboard = async () => {
-    try {
-      await navigator.clipboard.writeText(plantumlCode);
-      showStatus('Code copied to clipboard!');
-    } catch (error) {
-      showStatus('Failed to copy code', true);
+      showStatus('Failed to export chat log: ' + error.message, true);
     }
   };
 
@@ -262,9 +161,6 @@ const DiagramExport = ({ plantumlCode, diagramUrl, encodedCode }) => {
       case 'png':
         exportAsPNG();
         break;
-      case 'svg':
-        exportAsSVG();
-        break;
       case 'pdf':
         exportAsPDF();
         break;
@@ -273,8 +169,236 @@ const DiagramExport = ({ plantumlCode, diagramUrl, encodedCode }) => {
     }
   };
 
+  // Copy PlantUML code to clipboard
+  const copyToClipboard = async () => {
+    try {
+      await navigator.clipboard.writeText(plantumlCode);
+      showStatus('PlantUML code copied to clipboard!');
+    } catch (error) {
+      showStatus('Failed to copy code', true);
+    }
+  };
+
+  // Open PlantUML in new tab
+  const openInNewTab = () => {
+    const encoded = encodeURIComponent(plantumlCode);
+    window.open(`https://www.plantuml.com/plantuml/uml/${encoded}`, '_blank');
+  };
+
+  const styles = {
+    container: {
+      padding: '20px',
+      backgroundColor: 'white',
+      border: '1px solid #e2e8f0',
+      borderRadius: '12px',
+      margin: '16px',
+      boxShadow: '0 4px 20px rgba(0, 0, 0, 0.08)'
+    },
+    header: {
+      display: 'flex',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      marginBottom: '20px',
+      paddingBottom: '16px',
+      borderBottom: '2px solid #f1f5f9'
+    },
+    title: {
+      fontSize: '18px',
+      fontWeight: '600',
+      color: '#1f2937',
+      margin: 0
+    },
+    closeButton: {
+      padding: '8px',
+      border: 'none',
+      backgroundColor: 'transparent',
+      color: '#6b7280',
+      cursor: 'pointer',
+      borderRadius: '6px',
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      transition: 'all 0.2s ease'
+    },
+    closeButtonHover: {
+      backgroundColor: '#f3f4f6',
+      color: '#374151'
+    },
+    exportControls: {
+      display: 'flex',
+      gap: '12px',
+      alignItems: 'center',
+      flexWrap: 'wrap',
+      marginBottom: '16px'
+    },
+    select: {
+      padding: '10px 12px',
+      borderRadius: '8px',
+      border: '1px solid #d1d5db',
+      fontSize: '14px',
+      backgroundColor: 'white',
+      color: '#374151',
+      fontWeight: '500',
+      cursor: 'pointer',
+      minWidth: '120px'
+    },
+    exportButton: {
+      padding: '10px 20px',
+      backgroundColor: '#3b82f6',
+      color: 'white',
+      border: 'none',
+      borderRadius: '8px',
+      fontSize: '14px',
+      fontWeight: '500',
+      cursor: 'pointer',
+      display: 'flex',
+      alignItems: 'center',
+      gap: '8px',
+      boxShadow: '0 2px 8px rgba(59, 130, 246, 0.3)'
+    },
+    exportButtonHover: {
+      backgroundColor: '#2563eb',
+      transform: 'translateY(-1px)',
+      boxShadow: '0 4px 12px rgba(59, 130, 246, 0.4)'
+    },
+    exportButtonDisabled: {
+      opacity: 0.6,
+      cursor: 'not-allowed'
+    },
+    settingsButton: {
+      padding: '10px',
+      border: '1px solid #d1d5db',
+      backgroundColor: 'white',
+      color: '#6b7280',
+      borderRadius: '8px',
+      cursor: 'pointer',
+      display: 'flex',
+      alignItems: 'center'
+    },
+    settingsButtonHover: {
+      backgroundColor: '#f9fafb',
+      borderColor: '#9ca3af',
+      color: '#374151'
+    },
+    advancedSettings: {
+      padding: '20px',
+      backgroundColor: '#f8fafc',
+      borderRadius: '8px',
+      border: '1px solid #e2e8f0',
+      marginBottom: '16px'
+    },
+    settingRow: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: '12px',
+      marginBottom: '12px'
+    },
+    label: {
+      fontSize: '14px',
+      fontWeight: '500',
+      color: '#374151',
+      minWidth: '100px'
+    },
+    smallSelect: {
+      padding: '8px 12px',
+      borderRadius: '6px',
+      border: '1px solid #d1d5db',
+      fontSize: '14px',
+      backgroundColor: 'white',
+      color: '#374151',
+      cursor: 'pointer',
+      minWidth: '100px'
+    },
+    colorInput: {
+      width: '40px',
+      height: '40px',
+      borderRadius: '6px',
+      border: '1px solid #d1d5db',
+      cursor: 'pointer',
+      padding: 0
+    },
+    textInput: {
+      padding: '8px 12px',
+      borderRadius: '6px',
+      border: '1px solid #d1d5db',
+      fontSize: '14px',
+      backgroundColor: 'white',
+      color: '#374151',
+      minWidth: '200px'
+    },
+    checkboxLabel: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: '8px',
+      fontSize: '14px',
+      color: '#374151',
+      cursor: 'pointer'
+    },
+    checkbox: {
+      width: '16px',
+      height: '16px',
+      cursor: 'pointer'
+    },
+    quickActions: {
+      display: 'flex',
+      gap: '8px',
+      paddingTop: '16px',
+      borderTop: '1px solid #e2e8f0'
+    },
+    quickButton: {
+      padding: '8px 16px',
+      border: '1px solid #d1d5db',
+      backgroundColor: 'white',
+      color: '#374151',
+      borderRadius: '6px',
+      fontSize: '14px',
+      cursor: 'pointer',
+      display: 'flex',
+      alignItems: 'center',
+      gap: '6px'
+    },
+    quickButtonHover: {
+      backgroundColor: '#f9fafb',
+      borderColor: '#9ca3af',
+      transform: 'translateY(-1px)'
+    },
+    status: {
+      marginTop: '12px',
+      padding: '12px',
+      borderRadius: '6px',
+      fontSize: '14px',
+      fontWeight: '500',
+      textAlign: 'center',
+      backgroundColor: '#f0f9ff',
+      color: '#0369a1',
+      border: '1px solid #bae6fd'
+    },
+    errorStatus: {
+      backgroundColor: '#fef2f2',
+      color: '#dc2626',
+      border: '1px solid #fecaca'
+    }
+  };
+
+  // Helper function to merge styles
+  const mergeStyles = (baseStyle, hoverStyle, condition) => {
+    return condition ? { ...baseStyle, ...hoverStyle } : baseStyle;
+  };
+
   return (
     <div style={styles.container}>
+      {/* Header */}
+      <div style={styles.header}>
+        <h3 style={styles.title}>Export Diagram</h3>
+        <button 
+          onClick={onClose}
+          style={styles.closeButton}
+          title="Close export panel"
+        >
+          <FiX size={20} />
+        </button>
+      </div>
+
       {/* Main export controls */}
       <div style={styles.exportControls}>
         <select 
@@ -284,20 +408,20 @@ const DiagramExport = ({ plantumlCode, diagramUrl, encodedCode }) => {
           disabled={isExporting}
         >
           <option value="png">PNG Image</option>
-          <option value="svg">SVG Vector</option>
           <option value="pdf">PDF Document</option>
         </select>
         
         <button 
           onClick={handleExport}
           disabled={isExporting}
-          style={{
-            ...styles.exportButton,
-            opacity: isExporting ? 0.6 : 1,
-            cursor: isExporting ? 'not-allowed' : 'pointer'
-          }}
+          style={mergeStyles(
+            styles.exportButton,
+            styles.exportButtonHover,
+            !isExporting
+          )}
         >
-          {isExporting ? '⏳ Exporting...' : `📥 Export as ${exportFormat.toUpperCase()}`}
+          <FiDownload size={16} />
+          {isExporting ? 'Exporting...' : 'Export Diagram'}
         </button>
         
         <button
@@ -345,16 +469,7 @@ const DiagramExport = ({ plantumlCode, diagramUrl, encodedCode }) => {
             />
           </div>
           
-          <div style={styles.settingRow}>
-            <label style={styles.checkboxLabel}>
-              <input
-                type="checkbox"
-                checked={exportSettings.includeCode}
-                onChange={(e) => setExportSettings({...exportSettings, includeCode: e.target.checked})}
-              />
-              Include source code in PDF
-            </label>
-          </div>
+         
         </div>
       )}
       
@@ -365,14 +480,26 @@ const DiagramExport = ({ plantumlCode, diagramUrl, encodedCode }) => {
           style={styles.quickButton}
           title="Copy PlantUML code"
         >
-          📋 Copy Code
+          <FiCopy size={14} />
+          Copy Code
         </button>
+        
         <button 
-          onClick={() => window.open(`https://www.plantuml.com/plantuml/svg/${encodedCode}`, '_blank')}
+          onClick={openInNewTab}
           style={styles.quickButton}
-          title="Open in new tab"
+          title="Open in PlantUML editor"
         >
-          🔗 Open
+          <FiExternalLink size={14} />
+          Open Online
+        </button>
+        
+        <button 
+          onClick={exportChatLog}
+          style={styles.quickButton}
+          title="Export chat log as text file"
+        >
+          <FiFileText size={14} />
+          Export Chat
         </button>
       </div>
       
@@ -380,135 +507,14 @@ const DiagramExport = ({ plantumlCode, diagramUrl, encodedCode }) => {
       {exportStatus && (
         <div style={{
           ...styles.status,
-          color: exportStatus.includes('Failed') ? '#dc3545' : '#28a745'
+          ...(exportStatus.includes('Failed') && styles.errorStatus)
         }}>
+          {exportStatus.includes('Failed') ? '❌ ' : '✅ '}
           {exportStatus}
         </div>
       )}
     </div>
   );
-};
-
-const styles = {
-  container: {
-    marginTop: '15px',
-    padding: '20px',
-    backgroundColor: '#f8f9fa',
-    borderRadius: '10px',
-    border: '1px solid #dee2e6',
-    boxShadow: '0 2px 4px rgba(0,0,0,0.1)'
-  },
-  exportControls: {
-    display: 'flex',
-    gap: '10px',
-    alignItems: 'center',
-    flexWrap: 'wrap'
-  },
-  select: {
-    padding: '10px 15px',
-    borderRadius: '6px',
-    border: '1px solid #ced4da',
-    fontSize: '14px',
-    backgroundColor: 'white',
-    minWidth: '150px'
-  },
-  exportButton: {
-    padding: '10px 20px',
-    backgroundColor: '#007bff',
-    color: 'white',
-    border: 'none',
-    borderRadius: '6px',
-    fontSize: '14px',
-    fontWeight: '500',
-    transition: 'all 0.3s',
-    boxShadow: '0 2px 4px rgba(0,123,255,0.3)'
-  },
-  settingsButton: {
-    padding: '10px',
-    backgroundColor: '#6c757d',
-    color: 'white',
-    border: 'none',
-    borderRadius: '6px',
-    fontSize: '16px',
-    cursor: 'pointer',
-    transition: 'all 0.3s'
-  },
-  advancedSettings: {
-    marginTop: '15px',
-    padding: '15px',
-    backgroundColor: '#e9ecef',
-    borderRadius: '6px',
-    display: 'grid',
-    gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
-    gap: '10px'
-  },
-  settingRow: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: '10px'
-  },
-  label: {
-    fontSize: '13px',
-    fontWeight: '500',
-    minWidth: '80px'
-  },
-  smallSelect: {
-    padding: '5px 10px',
-    borderRadius: '4px',
-    border: '1px solid #ced4da',
-    fontSize: '13px',
-    flex: 1
-  },
-  colorInput: {
-    width: '50px',
-    height: '30px',
-    borderRadius: '4px',
-    border: '1px solid #ced4da',
-    cursor: 'pointer'
-  },
-  textInput: {
-    padding: '5px 10px',
-    borderRadius: '4px',
-    border: '1px solid #ced4da',
-    fontSize: '13px',
-    flex: 1
-  },
-  checkboxLabel: {
-    fontSize: '13px',
-    display: 'flex',
-    alignItems: 'center',
-    gap: '5px',
-    cursor: 'pointer'
-  },
-  quickActions: {
-    display: 'flex',
-    gap: '8px',
-    marginTop: '15px',
-    paddingTop: '15px',
-    borderTop: '1px solid #dee2e6'
-  },
-  quickButton: {
-    padding: '8px 15px',
-    backgroundColor: '#6c757d',
-    color: 'white',
-    border: 'none',
-    borderRadius: '6px',
-    fontSize: '13px',
-    cursor: 'pointer',
-    transition: 'all 0.3s',
-    display: 'flex',
-    alignItems: 'center',
-    gap: '5px'
-  },
-  status: {
-    marginTop: '10px',
-    padding: '8px 12px',
-    borderRadius: '4px',
-    fontSize: '13px',
-    fontWeight: '500',
-    textAlign: 'center',
-    backgroundColor: 'rgba(255,255,255,0.8)'
-  }
 };
 
 export default DiagramExport;
