@@ -1,15 +1,12 @@
 import os
-import json
 import re
+import json
 import requests
 import spacy
 from pathlib import Path
 from collections import defaultdict
 from typing import Dict
 from dotenv import load_dotenv
-
-# Load spaCy model once
-nlp = spacy.load("en_core_web_sm")
 
 load_dotenv(dotenv_path=Path(__file__).resolve().parent.parent / ".env")
 
@@ -19,10 +16,15 @@ headers = {
     "Content-Type": "application/json",
 }
 
+# Load spaCy once
+nlp = spacy.load("en_core_web_sm")
+
+# ----------------------------
+# Helpers
+# ----------------------------
+
 def extract_structure_from_text(text: str) -> Dict:
-    """
-    Heuristic extraction of UML structure from natural language.
-    """
+    """Very simple heuristic extraction of nouns for class diagrams only."""
     doc = nlp(text)
     classes = defaultdict(lambda: {"attributes": [], "methods": []})
     relationships = []
@@ -31,92 +33,102 @@ def extract_structure_from_text(text: str) -> Dict:
         if token.pos_ in {"NOUN", "PROPN"} and token.text[0].isupper():
             classes[token.text]  # init
 
-    model = {
+    return {
         "classes": [{"name": n, "attributes": d["attributes"], "methods": d["methods"]}
                     for n, d in classes.items()],
         "relationships": relationships
     }
-    if not model["classes"]:
-        model["classes"] = [{"name": "Example", "attributes": ["id: int"], "methods": ["doSomething()"]}]
-    return model
 
 def extract_json_block(text: str):
-    match = re.search(r"```json\s*(\{.*?\})\s*```", text, re.DOTALL)
+    """Extract JSON from GPT output (fenced or inline)."""
+    match = re.search(r"```json\s*(\{[\s\S]*?\})\s*```", text)
     if match:
         return match.group(1)
-    match = re.search(r"```\s*(\{.*?\})\s*```", text, re.DOTALL)
+    match = re.search(r"```[\s\S]*?```", text)
     if match:
-        return match.group(1)
-    match = re.search(r"(\{.*\})", text, re.DOTALL)
+        return match.group(1).strip("`")
+    match = re.search(r"(\{[\s\S]*\})", text)
     if match:
         return match.group(1)
     return None
 
-def parse_text_to_model(text, diagram_type='class', existing_model=None):
-    """Combine heuristic extraction with GPT refinement, supports merging edits."""
-    heuristic_model = extract_structure_from_text(text)
+# ----------------------------
+# Main parser
+# ----------------------------
 
-    # Determine the instruction based on diagram type
-    if diagram_type == 'usecase':
+def parse_text_to_model(text, diagram_type="class", existing_model=None):
+    """
+    Parse natural language description into a UML model (JSON).
+    Supports class, usecase, and sequence diagrams.
+    If existing_model is provided → EDIT MODE (apply changes).
+    """
+    # Heuristic model only makes sense for class
+    heuristic_model = extract_structure_from_text(text) if diagram_type == "class" else {}
+
+    # Prompt per type
+    if diagram_type == "usecase":
         instruction = "You are an expert UML modeler. Generate a Use Case Diagram JSON."
         model_structure = """{
-  "actors": [],
-  "use_cases": [],
-  "relationships": []
+  "actors": ["User"],
+  "use_cases": ["Login"],
+  "associations": [{"actor": "User", "use_case": "Login"}],
+  "includes": [],
+  "extends": []
 }"""
-    elif diagram_type == 'sequence':
+    elif diagram_type == "sequence":
         instruction = "You are an expert UML modeler. Generate a Sequence Diagram JSON."
         model_structure = """{
-  "participants": [],
-  "messages": []
+  "participants": ["User", "System"],
+  "messages": [
+    {"from": "User", "to": "System", "message": "Login request", "type": "sync"},
+    {"from": "System", "to": "User", "message": "Success", "type": "return"}
+  ],
+  "activations": []
 }"""
-    else:
+    else:  # class
         instruction = "You are an expert UML modeler. Generate a Class Diagram JSON."
         model_structure = """{
-  "classes": [],
-  "relationships": []
+  "classes": [
+    {"name": "User", "attributes": ["id: int", "name: string"], "methods": ["login()", "logout()"]},
+    {"name": "Book", "attributes": ["isbn: string", "title: string"], "methods": []}
+  ],
+  "relationships": [
+    {"from": "User", "to": "Book", "type": "association", "label": "borrows"}
+  ]
 }"""
 
+    # EDIT MODE
     if existing_model:
-        # EDIT MODE - Modify existing model
         prompt = f"""{instruction}
 
-EDIT MODE: You are modifying an existing {diagram_type} diagram.
-
-USER'S EDIT REQUEST:
-{text}
-
-CURRENT UML MODEL (JSON):
+EDIT MODE:
+You are modifying an existing {diagram_type} diagram.
+USER REQUEST: {text}
+CURRENT MODEL (JSON):
 {json.dumps(existing_model, indent=2)}
 
-❗ IMPORTANT EDITING RULES:
-1. Start from the current model above
-2. Apply ONLY the requested changes from the user's edit request
-3. Keep all existing elements unless explicitly removed in the edit request
-4. Do NOT replace the entire model - only modify what's requested
-5. Return the FULL updated JSON model including unchanged parts
-6. If the edit request is unclear, make minimal changes or return the current model
-
-Return the full updated UML model JSON only:"""
+RULES:
+1. Keep all existing elements unless explicitly removed
+2. Apply ONLY requested changes
+3. Return the FULL updated JSON, not just the changes
+"""
     else:
-        # CREATE MODE - New diagram
+        # CREATE MODE
         prompt = f"""{instruction}
 
-USER'S DESCRIPTION:
+USER DESCRIPTION:
 {text}
 
-Heuristic extraction (for reference only):
-{json.dumps(heuristic_model, indent=2)}
-
-Expected JSON structure for {diagram_type} diagram:
+Start from this JSON skeleton:
 {model_structure}
 
-Return the full UML model JSON only:"""
+Return the full JSON model only.
+"""
 
     body = {
         "model": "gpt-4",
         "messages": [{"role": "user", "content": prompt}],
-        "temperature": 0.1  # Lower temperature for more consistent edits
+        "temperature": 0.1
     }
 
     try:
@@ -129,89 +141,35 @@ Return the full UML model JSON only:"""
         print("🧠 Raw GPT content:\n", content)
 
         json_str = extract_json_block(content) or content
-        
-        # Clean up the JSON string
         json_str = json_str.strip()
-        json_str = re.sub(r',\s*([}\]])', r'\1', json_str)  # Remove trailing commas
-        
+        json_str = re.sub(r",\s*([}\]])", r"\1", json_str)  # remove trailing commas
+
         parsed_model = json.loads(json_str)
-        
-        # If we're in edit mode but got a completely different structure, fall back to existing model
+
+        # Compatibility check
         if existing_model and not _models_are_compatible(existing_model, parsed_model, diagram_type):
-            print("⚠️ Incompatible model structure detected, falling back to existing model")
+            print("⚠️ Incompatible model, fallback to existing")
             return existing_model
-            
+
         return parsed_model
-        
-    except json.JSONDecodeError as e:
-        print("❌ JSON parsing error:", str(e))
-        print("❌ Failed JSON content:", json_str if 'json_str' in locals() else "N/A")
-        return existing_model or heuristic_model
+
     except Exception as e:
-        print("❌ Error parsing content:", str(e))
+        print("❌ Parser error:", str(e))
         return existing_model or heuristic_model
+
+# ----------------------------
+# Compatibility check
+# ----------------------------
 
 def _models_are_compatible(existing_model, new_model, diagram_type):
-    """
-    Check if the new model structure is compatible with the existing one.
-    This prevents completely different diagram structures from replacing the original.
-    """
+    """Ensure new model matches schema for the given type."""
     try:
-        if diagram_type == 'class':
-            return ('classes' in new_model and 
-                   isinstance(new_model['classes'], list) and
-                   'relationships' in new_model and
-                   isinstance(new_model['relationships'], list))
-        
-        elif diagram_type == 'usecase':
-            return ('actors' in new_model and 
-                   isinstance(new_model['actors'], list) and
-                   'use_cases' in new_model and
-                   isinstance(new_model['use_cases'], list))
-        
-        elif diagram_type == 'sequence':
-            return ('participants' in new_model and 
-                   isinstance(new_model['participants'], list) and
-                   'messages' in new_model and
-                   isinstance(new_model['messages'], list))
-        
+        if diagram_type == "class":
+            return "classes" in new_model and "relationships" in new_model
+        elif diagram_type == "usecase":
+            return "actors" in new_model and "use_cases" in new_model
+        elif diagram_type == "sequence":
+            return "participants" in new_model and "messages" in new_model
         return False
-        
     except:
         return False
-
-# Helper function to merge models (optional, for more advanced editing)
-def merge_models(base_model, changes_model, diagram_type):
-    """
-    Merge changes into base model. This is a more advanced approach
-    that could be used for specific edit operations.
-    """
-    if not base_model:
-        return changes_model
-        
-    if diagram_type == 'class':
-        merged = {
-            "classes": base_model.get("classes", []),
-            "relationships": base_model.get("relationships", [])
-        }
-        
-        # Apply changes (this would need more sophisticated logic)
-        if "classes" in changes_model:
-            for new_class in changes_model["classes"]:
-                # Check if class already exists
-                existing_idx = next((i for i, cls in enumerate(merged["classes"]) 
-                                   if cls["name"] == new_class["name"]), -1)
-                if existing_idx >= 0:
-                    # Update existing class
-                    merged["classes"][existing_idx].update(new_class)
-                else:
-                    # Add new class
-                    merged["classes"].append(new_class)
-        
-        if "relationships" in changes_model:
-            merged["relationships"].extend(changes_model["relationships"])
-            
-        return merged
-        
-    # Similar logic for other diagram types...
-    return base_model

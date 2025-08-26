@@ -6,7 +6,13 @@ from routes.generate import generate_bp
 from routes.diagrams import diagrams_bp
 
 app = Flask(__name__)
-CORS(app)
+
+# ✅ Enable CORS with credentials (cookies)
+CORS(app, supports_credentials=True, resources={
+    r"/api/*": {
+        "origins": ["http://localhost:3000", "http://127.0.0.1:3000"]
+    }
+})
 
 # Database config
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///diagrams.db'

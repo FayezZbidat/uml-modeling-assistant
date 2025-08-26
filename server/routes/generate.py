@@ -15,28 +15,54 @@ load_dotenv()
 generate_bp = Blueprint('generate', __name__)
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
+# ----------------------------
+# Helpers
+# ----------------------------
+
 def get_session_id(req):
     sid = req.cookies.get("session_id")
     if not sid:
         sid = str(uuid.uuid4())
     return sid
 
+def _system_for_type(diagram_type: str, existing_content: str | None) -> str:
+    if diagram_type == "usecase":
+        base = (
+            "You are an assistant that generates UML **Use Case** diagrams only. "
+            "Never output Class or Sequence diagrams.\n"
+            "Output either PlantUML for use case diagrams (actors/usecase/associations) or JSON of the use case model."
+        )
+    elif diagram_type == "sequence":
+        base = (
+            "You are an assistant that generates UML **Sequence** diagrams only. "
+            "Never output Class or Use Case diagrams.\n"
+            "Output either PlantUML for sequence diagrams (participants/actor/messages) or JSON of the sequence model."
+        )
+    else:
+        base = (
+            "You are an assistant that generates UML **Class** diagrams only. "
+            "Never output Use Case or Sequence diagrams.\n"
+            "Output either PlantUML for class diagrams (class/relationships) or JSON of the class model."
+        )
+
+    if existing_content:
+        base += (
+            f"\n\nEDIT MODE: You are editing an existing {diagram_type} diagram. "
+            f"Modify the current diagram content rather than creating a new one.\n"
+            f"CURRENT DIAGRAM CONTENT:\n{existing_content}"
+        )
+    return base
+
 def extract_plantuml_blocks(text: str) -> str:
-    """
-    Extract valid PlantUML (@startuml ... @enduml).
-    Ignores ASCII-art or Markdown boxes.
-    """
+    """Extract valid PlantUML (@startuml ... @enduml)."""
     match = re.findall(r'@startuml[\s\S]*?@enduml', text)
     if match:
         return "\n".join(match)
     return ""
 
 def extract_json_block(text: str):
-    """
-    Extract JSON object from GPT output (fenced, inline, etc.).
-    Returns JSON string or None.
-    """
-    # 1️⃣ ```json ... ```
+    """Extract JSON object from GPT output (fenced, inline, etc.)."""
+    # ```json ... ```
     match = re.search(r'```json\s*([\s\S]*?)\s*```', text)
     if match:
         candidate = match.group(1).strip()
@@ -45,8 +71,7 @@ def extract_json_block(text: str):
             return candidate
         except:
             pass
-
-    # 2️⃣ ``` ... ```
+    # ``` ... ```
     match = re.search(r'```\s*([\s\S]*?)\s*```', text)
     if match:
         candidate = match.group(1).strip()
@@ -55,8 +80,7 @@ def extract_json_block(text: str):
             return candidate
         except:
             pass
-
-    # 3️⃣ Largest {...}
+    # Largest {...}
     match = re.search(r'(\{[\s\S]*\})', text)
     if match:
         candidate = match.group(1).strip()
@@ -66,14 +90,17 @@ def extract_json_block(text: str):
             return candidate
         except:
             pass
-
     return None
+
+# ----------------------------
+# Route
+# ----------------------------
 
 @generate_bp.route('/generate', methods=['POST'])
 def generate():
-    data = request.get_json()
+    data = request.get_json() or {}
     text = data.get("text", "").strip()
-    diagram_type = data.get("type", "class").strip().lower()
+    diagram_type = (data.get("type", "class") or "class").strip().lower()
     diagram_id = data.get("diagram_id")
 
     print("📥 Received text:", text)
@@ -81,11 +108,11 @@ def generate():
     print("📊 Diagram ID:", diagram_id)
 
     session_id = get_session_id(request)
-    
-    # Load conversation from database
+
+    # Load/create conversation container
     session = ConversationSession.query.get(session_id)
     if session:
-        conversation = json.loads(session.messages)
+        conversation = json.loads(session.messages or "[]")
     else:
         conversation = []
         session = ConversationSession(
@@ -95,97 +122,82 @@ def generate():
         )
         db.session.add(session)
 
-    # If we have a diagram_id, load the existing content for context
+    # If a diagram_id arrives, load its current content for EDIT MODE context
     existing_content = None
     if diagram_id:
         diagram = Diagram.query.get(diagram_id)
         if diagram:
             existing_content = diagram.plantuml_code
-            # Add context about what we're editing if not already present
-            if not any(msg.get("role") == "system" and "EDIT MODE" in msg.get("content", "") for msg in conversation):
-                edit_context = f"""EDIT MODE: You are editing an existing {diagram.diagram_type} diagram.
-Current diagram content:
-{diagram.plantuml_code}
 
-When the user asks to edit, modify the existing diagram instead of creating a new one."""
-                conversation.insert(0, {"role": "system", "content": edit_context})
+    # 🔧 CRITICAL FIX:
+    # Always replace ANY existing system messages with the correct, fresh one for THIS request type.
+    conversation = [m for m in conversation if m.get("role") != "system"]
+    conversation.insert(0, {"role": "system", "content": _system_for_type(diagram_type, existing_content)})
 
-    # System instruction with edit context
-    if not any(msg.get("role") == "system" for msg in conversation):
-        if diagram_type == "usecase":
-            system_instruction = "You are an assistant that generates UML Use Case Diagrams. Always output JSON or PlantUML."
-        elif diagram_type == "sequence":
-            system_instruction = "You are an assistant that generates UML Sequence Diagrams. Always output JSON or PlantUML."
-        else:
-            system_instruction = "You are an assistant that generates UML Class Diagrams. Always output JSON or PlantUML."
-        
-        if existing_content:
-            system_instruction += f"\n\nEDIT MODE: You are editing an existing diagram. Current content:\n{existing_content}"
-        
-        conversation.insert(0, {"role": "system", "content": system_instruction})
-
+    # Append user message
     conversation.append({"role": "user", "content": text})
 
     # Quick validation
     if len(text.split()) < 3:
-        return make_response(jsonify({
+        resp = make_response(jsonify({
             "plantuml": "",
             "model": {},
-            "explanation": "❗ Please describe a system."
+            "explanation": "❗ Please describe a system.",
+            "diagram_id": diagram_id
         }), 200)
+        resp.set_cookie("session_id", session_id, httponly=True, samesite='Lax')
+        return resp
 
     try:
-        # Call GPT with the full conversation history
+        # Call GPT
         response = client.chat.completions.create(
             model="gpt-4",
-            messages=conversation
+            messages=conversation,
+            temperature=0.2
         )
         reply = response.choices[0].message.content
         print("🤖 GPT reply:", reply)
 
-        # Debug checks
         plantuml_code = extract_plantuml_blocks(reply)
         json_block = extract_json_block(reply)
-        print("🔎 Extracted PlantUML:", bool(plantuml_code))
-        print("🔎 Extracted JSON:", bool(json_block))
 
-        # Add assistant reply to conversation
-        conversation.append({"role": "assistant", "content": reply})
-        
-        # Save updated conversation to database
-        session.messages = json.dumps(conversation)
-        session.diagram_id = diagram_id
-        db.session.commit()
+        # 🛡️ Type-guard. If PlantUML of wrong type, discard so we fallback to JSON or parser.
+        if plantuml_code:
+            if diagram_type == "sequence" and ("participant" not in plantuml_code and "actor" not in plantuml_code):
+                print("⚠️ Discarding wrong diagram type (not sequence)")
+                plantuml_code = ""
+            elif diagram_type == "usecase" and ("usecase" not in plantuml_code and "actor" not in plantuml_code):
+                print("⚠️ Discarding wrong diagram type (not use case)")
+                plantuml_code = ""
+            elif diagram_type == "class" and "class" not in plantuml_code:
+                print("⚠️ Discarding wrong diagram type (not class)")
+                plantuml_code = ""
 
         explanation = reply.strip()
         model = None
 
-        # 1️⃣ GPT gave PlantUML
+        # 1) If we have valid PlantUML of the right type, we're done (optional: also produce model)
         if plantuml_code:
             model = parse_text_to_model(text, diagram_type)
 
-        # 2️⃣ JSON → PlantUML
-        if not plantuml_code:
-            if json_block:
-                print("✅ Extracted JSON block:\n", json_block)
-                try:
-                    model = json.loads(json_block)
-                    print("✅ Parsed JSON successfully")
-                    plantuml_code = generate_plantuml(model, diagram_type)
-                    print("✅ Generated PlantUML:\n", plantuml_code)
-                    explanation += "\n\n✅ Generated PlantUML from JSON model."
-                except Exception as e:
-                    print("❌ JSON parse error:", e)
+        # 2) If we got JSON, convert to PlantUML (forced to the requested type)
+        if not plantuml_code and json_block:
+            print("✅ Extracted JSON block:\n", json_block)
+            try:
+                model = json.loads(json_block)
+                plantuml_code = generate_plantuml(model, diagram_type)
+                explanation += "\n\n✅ Generated PlantUML from JSON model."
+            except Exception as e:
+                print("❌ JSON parse error:", e)
 
-        # 3️⃣ Force parser if still nothing
+        # 3) If still nothing, parse text → model → PlantUML
         if not plantuml_code:
             model = parse_text_to_model(text, diagram_type, existing_model=model)
             if model:
                 plantuml_code = generate_plantuml(model, diagram_type)
-                print("✅ Generated PlantUML from parsed text model:\n", plantuml_code)
                 explanation += "\n\n✅ Generated PlantUML from parsed text model."
 
-        # 4️⃣ Final fallback
+        # 4) Final fallback specific to requested type
         if not plantuml_code:
             explanation += "\n\n⚠️ No UML code detected. Showing fallback example."
             if diagram_type == "usecase":
@@ -207,45 +219,45 @@ class User {
   +id
   +name
   +email
-  +borrowBook()
-  +returnBook()
 }
-class Book {
-  +ISBN
-  +title
-  +author
-}
-class Librarian {
-  +addBook()
-  +removeBook()
-}
-class Borrowing {
-  +borrowingDate
-  +returnDate
-}
-User "1" -- "*" Borrowing
-Book "1" -- "*" Borrowing
-Librarian --|> User
 @enduml"""
 
-        # ✅ Save to DB
+        # Persist conversation and diagram
+        conversation.append({"role": "assistant", "content": reply})
+        session.messages = json.dumps(conversation)
+        session.diagram_id = diagram_id  # keep it in sync
+
+        # Create/update diagram
         if diagram_id:
             diagram = Diagram.query.get(diagram_id)
             if diagram:
                 diagram.plantuml_code = plantuml_code.strip()
-                diagram.flow_data = json.dumps(model) if model else None
-                db.session.commit()
+                diagram.diagram_type = diagram_type
+            else:
+                # diagram_id provided but missing -> create new
+                new_diagram = Diagram(
+                    id=str(uuid.uuid4()),
+                    name="Generated Diagram",
+                    diagram_type=diagram_type,
+                    plantuml_code=plantuml_code.strip()
+                )
+                db.session.add(new_diagram)
+                db.session.flush()
+                diagram_id = new_diagram.id
+                session.diagram_id = diagram_id
         else:
             new_diagram = Diagram(
                 id=str(uuid.uuid4()),
                 name="Generated Diagram",
                 diagram_type=diagram_type,
-                plantuml_code=plantuml_code.strip(),
-                flow_data=json.dumps(model) if model else None
+                plantuml_code=plantuml_code.strip()
             )
             db.session.add(new_diagram)
-            db.session.commit()
+            db.session.flush()  # get id
             diagram_id = new_diagram.id
+            session.diagram_id = diagram_id
+
+        db.session.commit()
 
         resp = make_response(jsonify({
             "plantuml": plantuml_code.strip(),
@@ -261,8 +273,10 @@ Librarian --|> User
         return make_response(jsonify({
             "plantuml": "",
             "model": {},
-            "explanation": f"❌ Error: {str(e)}"
+            "explanation": f"❌ Error: {str(e)}",
+            "diagram_id": diagram_id
         }), 500)
+
 
 @generate_bp.route('/clear-session', methods=['POST'])
 def clear_session():

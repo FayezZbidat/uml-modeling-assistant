@@ -1,8 +1,9 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import html2canvas from 'html2canvas';
 import jsPDF from 'jspdf';
 import { saveAs } from 'file-saver';
-import { FiDownload, FiCopy, FiExternalLink, FiX, FiCheck, FiFileText } from 'react-icons/fi';
+import { FiDownload, FiCopy, FiExternalLink, FiX, FiFileText } from 'react-icons/fi';
+import plantumlEncoder from 'plantuml-encoder';
 
 const DiagramExport = ({ plantumlCode, diagramRef, chatMessages, onClose }) => {
   const [isExporting, setIsExporting] = useState(false);
@@ -16,13 +17,11 @@ const DiagramExport = ({ plantumlCode, diagramRef, chatMessages, onClose }) => {
     fileName: 'uml-diagram'
   });
 
-  // Helper function to generate filename
   const getFileName = (extension) => {
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
     return `${exportSettings.fileName}-${timestamp}.${extension}`;
   };
 
-  // Helper function to show status messages
   const showStatus = (message, isError = false) => {
     setExportStatus(message);
     setTimeout(() => setExportStatus(''), 3000);
@@ -32,6 +31,10 @@ const DiagramExport = ({ plantumlCode, diagramRef, chatMessages, onClose }) => {
   // Export as PNG
   const exportAsPNG = async () => {
     try {
+      if (!diagramRef || !diagramRef.current) {
+        showStatus('No diagram element found to capture', true);
+        return;
+      }
       setIsExporting(true);
       showStatus('Generating PNG...');
       
@@ -57,105 +60,76 @@ const DiagramExport = ({ plantumlCode, diagramRef, chatMessages, onClose }) => {
     }
   };
 
-  // Export as PDF
-// Export as PDF (diagram + PlantUML only, no chat log)
-const exportAsPDF = async () => {
-  try {
-    setIsExporting(true);
-    showStatus('Generating PDF...');
-
-    const pdf = new jsPDF({
-      orientation: 'landscape',
-      unit: 'mm',
-      format: 'a4'
-    });
-
-    // Add metadata
-    pdf.setProperties({
-      title: exportSettings.fileName,
-      subject: 'UML Diagram Export',
-      author: 'UML Modeling Assistant',
-      creator: 'UML Modeling Assistant'
-    });
-
-    // Capture diagram as image
-    const canvas = await html2canvas(diagramRef.current, {
-      backgroundColor: exportSettings.background,
-      scale: 2,
-      logging: false
-    });
-
-    const imgData = canvas.toDataURL('image/png');
-
-    // Calculate image dimensions
-    const pageWidth = pdf.internal.pageSize.getWidth();
-    const pageHeight = pdf.internal.pageSize.getHeight();
-    const imgWidth = pageWidth - 40;
-    const imgHeight = (canvas.height * imgWidth) / canvas.width;
-
-    // Add diagram image
-    pdf.addImage(imgData, 'PNG', 20, 20, imgWidth, imgHeight);
-
-    // Add PlantUML code
-    pdf.addPage();
-    pdf.setFontSize(14);
-    pdf.setTextColor(33, 33, 33);
-    pdf.text('PlantUML Source Code', 20, 20);
-
-    pdf.setFontSize(9);
-    pdf.setFont('courier', 'normal');
-    pdf.setTextColor(0, 0, 0);
-
-    let codeY = 35;
-    plantumlCode.split('\n').forEach(line => {
-      if (codeY > pageHeight - 20) {
-        pdf.addPage();
-        codeY = 20;
-      }
-      const wrappedLines = pdf.splitTextToSize(line, pageWidth - 40);
-      wrappedLines.forEach(wrappedLine => {
-        pdf.text(wrappedLine, 20, codeY);
-        codeY += 5;
-      });
-    });
-
-    pdf.save(getFileName('pdf'));
-    showStatus('PDF exported successfully!');
-  } catch (error) {
-    showStatus('Failed to export PDF: ' + error.message, true);
-  } finally {
-    setIsExporting(false);
-  }
-};
-
-  // Export chat log as text file
-  const exportChatLog = () => {
+  // Export as PDF (diagram + PlantUML only)
+  const exportAsPDF = async () => {
     try {
-      if (!chatMessages || chatMessages.length === 0) {
-        showStatus('No chat messages to export', true);
+      if (!diagramRef || !diagramRef.current) {
+        showStatus('No diagram element found to capture', true);
         return;
       }
-      
-      let chatText = `UML Modeling Assistant - Chat Log\n`;
-      chatText += `Generated: ${new Date().toLocaleString()}\n`;
-      chatText += `========================================\n\n`;
-      
-      chatMessages.forEach(msg => {
-        const timestamp = new Date(msg.timestamp || Date.now()).toLocaleTimeString();
-        const sender = msg.sender === 'user' ? 'You' : 'UMLBot';
-        chatText += `[${timestamp}] ${sender}: ${msg.message}\n`;
+      setIsExporting(true);
+      showStatus('Generating PDF...');
+
+      const pdf = new jsPDF({
+        orientation: 'landscape',
+        unit: 'mm',
+        format: 'a4'
       });
-      
-      const blob = new Blob([chatText], { type: 'text/plain;charset=utf-8' });
-      saveAs(blob, getFileName('txt'));
-      showStatus('Chat log exported successfully!');
-      
+
+      pdf.setProperties({
+        title: exportSettings.fileName,
+        subject: 'UML Diagram Export',
+        author: 'UML Modeling Assistant',
+        creator: 'UML Modeling Assistant'
+      });
+
+      const canvas = await html2canvas(diagramRef.current, {
+        backgroundColor: exportSettings.background,
+        scale: 2,
+        logging: false
+      });
+
+      const imgData = canvas.toDataURL('image/png');
+
+      const pageWidth = pdf.internal.pageSize.getWidth();
+      const pageHeight = pdf.internal.pageSize.getHeight();
+      const imgWidth = pageWidth - 40;
+      const imgHeight = (canvas.height * imgWidth) / canvas.width;
+
+      pdf.addImage(imgData, 'PNG', 20, 20, imgWidth, imgHeight);
+
+      // PlantUML code page
+      pdf.addPage();
+      pdf.setFontSize(14);
+      pdf.setTextColor(33, 33, 33);
+      pdf.text('PlantUML Source Code', 20, 20);
+
+      pdf.setFontSize(9);
+      pdf.setFont('courier', 'normal');
+      pdf.setTextColor(0, 0, 0);
+
+      let codeY = 35;
+      plantumlCode.split('\n').forEach(line => {
+        if (codeY > pageHeight - 20) {
+          pdf.addPage();
+          codeY = 20;
+        }
+        const wrappedLines = pdf.splitTextToSize(line, pageWidth - 40);
+        wrappedLines.forEach(wrappedLine => {
+          pdf.text(wrappedLine, 20, codeY);
+          codeY += 5;
+        });
+      });
+
+      pdf.save(getFileName('pdf'));
+      showStatus('PDF exported successfully!');
     } catch (error) {
-      showStatus('Failed to export chat log: ' + error.message, true);
+      showStatus('Failed to export PDF: ' + error.message, true);
+    } finally {
+      setIsExporting(false);
     }
   };
 
-  // Main export handler
   const handleExport = () => {
     switch (exportFormat) {
       case 'png':
@@ -169,20 +143,23 @@ const exportAsPDF = async () => {
     }
   };
 
-  // Copy PlantUML code to clipboard
   const copyToClipboard = async () => {
     try {
-      await navigator.clipboard.writeText(plantumlCode);
+      await navigator.clipboard.writeText(plantumlCode || "");
       showStatus('PlantUML code copied to clipboard!');
     } catch (error) {
       showStatus('Failed to copy code', true);
     }
   };
 
-  // Open PlantUML in new tab
+  // ✅ Proper PlantUML link using deflated encoding
   const openInNewTab = () => {
-    const encoded = encodeURIComponent(plantumlCode);
-    window.open(`https://www.plantuml.com/plantuml/uml/${encoded}`, '_blank');
+    try {
+      const encoded = plantumlEncoder.encode(plantumlCode || "@startuml\n@enduml");
+      window.open(`https://www.plantuml.com/plantuml/svg/${encoded}`, "_blank");
+    } catch (e) {
+      showStatus("Failed to open PlantUML online", true);
+    }
   };
 
   const styles = {
@@ -220,10 +197,6 @@ const exportAsPDF = async () => {
       justifyContent: 'center',
       transition: 'all 0.2s ease'
     },
-    closeButtonHover: {
-      backgroundColor: '#f3f4f6',
-      color: '#374151'
-    },
     exportControls: {
       display: 'flex',
       gap: '12px',
@@ -256,15 +229,6 @@ const exportAsPDF = async () => {
       gap: '8px',
       boxShadow: '0 2px 8px rgba(59, 130, 246, 0.3)'
     },
-    exportButtonHover: {
-      backgroundColor: '#2563eb',
-      transform: 'translateY(-1px)',
-      boxShadow: '0 4px 12px rgba(59, 130, 246, 0.4)'
-    },
-    exportButtonDisabled: {
-      opacity: 0.6,
-      cursor: 'not-allowed'
-    },
     settingsButton: {
       padding: '10px',
       border: '1px solid #d1d5db',
@@ -274,11 +238,6 @@ const exportAsPDF = async () => {
       cursor: 'pointer',
       display: 'flex',
       alignItems: 'center'
-    },
-    settingsButtonHover: {
-      backgroundColor: '#f9fafb',
-      borderColor: '#9ca3af',
-      color: '#374151'
     },
     advancedSettings: {
       padding: '20px',
@@ -326,19 +285,6 @@ const exportAsPDF = async () => {
       color: '#374151',
       minWidth: '200px'
     },
-    checkboxLabel: {
-      display: 'flex',
-      alignItems: 'center',
-      gap: '8px',
-      fontSize: '14px',
-      color: '#374151',
-      cursor: 'pointer'
-    },
-    checkbox: {
-      width: '16px',
-      height: '16px',
-      cursor: 'pointer'
-    },
     quickActions: {
       display: 'flex',
       gap: '8px',
@@ -356,11 +302,6 @@ const exportAsPDF = async () => {
       display: 'flex',
       alignItems: 'center',
       gap: '6px'
-    },
-    quickButtonHover: {
-      backgroundColor: '#f9fafb',
-      borderColor: '#9ca3af',
-      transform: 'translateY(-1px)'
     },
     status: {
       marginTop: '12px',
@@ -380,10 +321,8 @@ const exportAsPDF = async () => {
     }
   };
 
-  // Helper function to merge styles
-  const mergeStyles = (baseStyle, hoverStyle, condition) => {
-    return condition ? { ...baseStyle, ...hoverStyle } : baseStyle;
-  };
+  const mergeStyles = (baseStyle, hoverStyle, condition) =>
+    condition ? { ...baseStyle, ...hoverStyle } : baseStyle;
 
   return (
     <div style={styles.container}>
@@ -416,7 +355,7 @@ const exportAsPDF = async () => {
           disabled={isExporting}
           style={mergeStyles(
             styles.exportButton,
-            styles.exportButtonHover,
+            { backgroundColor: '#2563eb', transform: 'translateY(-1px)', boxShadow: '0 4px 12px rgba(59, 130, 246, 0.4)' },
             !isExporting
           )}
         >
@@ -468,8 +407,6 @@ const exportAsPDF = async () => {
               style={styles.textInput}
             />
           </div>
-          
-         
         </div>
       )}
       
@@ -494,7 +431,27 @@ const exportAsPDF = async () => {
         </button>
         
         <button 
-          onClick={exportChatLog}
+          onClick={() => {
+            try {
+              if (!chatMessages || chatMessages.length === 0) {
+                showStatus('No chat messages to export', true);
+                return;
+              }
+              let chatText = `UML Modeling Assistant - Chat Log\n`;
+              chatText += `Generated: ${new Date().toLocaleString()}\n`;
+              chatText += `========================================\n\n`;
+              chatMessages.forEach(msg => {
+                const timestamp = new Date(msg.timestamp || Date.now()).toLocaleTimeString();
+                const sender = msg.sender === 'user' ? 'You' : 'UMLBot';
+                chatText += `[${timestamp}] ${sender}: ${msg.message}\n`;
+              });
+              const blob = new Blob([chatText], { type: 'text/plain;charset=utf-8' });
+              saveAs(blob, getFileName('txt'));
+              showStatus('Chat log exported successfully!');
+            } catch (error) {
+              showStatus('Failed to export chat log: ' + error.message, true);
+            }
+          }}
           style={styles.quickButton}
           title="Export chat log as text file"
         >
@@ -507,7 +464,7 @@ const exportAsPDF = async () => {
       {exportStatus && (
         <div style={{
           ...styles.status,
-          ...(exportStatus.includes('Failed') && styles.errorStatus)
+          ...(exportStatus.includes('Failed') ? styles.errorStatus : {})
         }}>
           {exportStatus.includes('Failed') ? '❌ ' : '✅ '}
           {exportStatus}
